@@ -88,7 +88,7 @@ use core::{
 /// value whenever it feels like it.
 ///
 #[derive(Debug)]
-pub struct TripleBuffer<T: Send> {
+pub struct TripleBuffer<T: Send + Clone> {
     /// Input object used by producers to send updates
     input: Input<T>,
 
@@ -103,14 +103,14 @@ impl<T: Clone + Send> TripleBuffer<T> {
     }
 }
 //
-impl<T: Default + Send> Default for TripleBuffer<T> {
+impl<T: Default + Send + Clone> Default for TripleBuffer<T> {
     /// Construct a triple buffer with a default-constructed value
     fn default() -> Self {
         Self::new_impl(T::default)
     }
 }
 //
-impl<T: Send> TripleBuffer<T> {
+impl<T: Send + Clone> TripleBuffer<T> {
     /// Construct a triple buffer, using a functor to generate initial values
     fn new_impl(mut generator: impl FnMut() -> T) -> Self {
         // Start with the shared state...
@@ -121,6 +121,7 @@ impl<T: Send> TripleBuffer<T> {
             input: Input {
                 shared: shared_state.clone(),
                 input_idx: 1,
+                data: generator(),
             },
             output: Output {
                 shared: shared_state,
@@ -164,6 +165,7 @@ impl<T: Clone + Send> Clone for TripleBuffer<T> {
             input: Input {
                 shared: shared_state.clone(),
                 input_idx: self.input.input_idx,
+                data: self.input.data.clone(),
             },
             output: Output {
                 shared: shared_state,
@@ -174,7 +176,7 @@ impl<T: Clone + Send> Clone for TripleBuffer<T> {
 }
 //
 #[doc(hidden)]
-impl<T: PartialEq + Send> PartialEq for TripleBuffer<T> {
+impl<T: PartialEq + Send + Clone> PartialEq for TripleBuffer<T> {
     fn eq(&self, other: &Self) -> bool {
         // Compare the shared states. This is safe because at this layer of the
         // interface, one needs an Input/Output &mut to mutate the shared state.
@@ -195,20 +197,30 @@ impl<T: PartialEq + Send> PartialEq for TripleBuffer<T> {
 /// and scheduling-induced slowdowns cannot happen.
 ///
 #[derive(Debug)]
-pub struct Input<T: Send> {
+pub struct Input<T: Send + Clone> {
     /// Reference-counted shared state
     shared: Arc<SharedState<T>>,
 
     /// Index of the input buffer (which is private to the producer)
     input_idx: BufferIndex,
+
+    /// A copy of the data (mostly the one you're working on)
+    data: T,
 }
 //
 // Public interface
-impl<T: Send> Input<T> {
+impl<T: Send + Clone> Input<T> {
+    /// Gets the saved data
+    pub fn read(&self) -> &T {
+        &self.data
+    }
+
     /// Write a new value into the triple buffer
     pub fn write(&mut self, value: T) {
         // Update the input buffer
-        *self.input_buffer() = value;
+        *self.input_buffer() = value.clone();
+
+        self.data = value;
 
         // Publish our update to the consumer
         self.publish();
@@ -897,8 +909,9 @@ mod tests {
 
     /// Range check for triple buffer indexes
     #[allow(unused_comparisons)]
+    // #[allow(clippy::abs)]
     fn index_in_range(idx: BufferIndex) -> bool {
-        (idx >= 0) & (idx <= 2)
+        (0..=2).contains(&idx)
     }
 
     /// Get a pointer to the target of some reference (e.g. an &, an Arc...)
